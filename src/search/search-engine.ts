@@ -14,6 +14,7 @@ import {
   chunkArray,
   countError,
   logVerbose,
+  normalizeExactMatchContent,
   removeDiacritics,
 } from '../tools/utils'
 import { Notice } from 'obsidian'
@@ -114,6 +115,17 @@ export class SearchEngine {
 
       // Add docs to minisearch
       await this.minisearch.addAllAsync(docs)
+
+      // A file may have been deleted while we were reading/indexing it.
+      // Its delete handler ran before the doc was in minisearch,
+      // so it couldn't discard it.
+      // Remove vanished files now to avoid keeping stale entries.
+      const deleted = docs.filter(
+        doc => !this.plugin.app.vault.getAbstractFileByPath(doc.path)
+      )
+      if (deleted.length) {
+        this.removeFromPaths(deleted.map(doc => doc.path))
+      }
     }
   }
 
@@ -190,7 +202,6 @@ export class SearchEngine {
         }
         const mtime = storedFields?.mtime as number
         const now = new Date().valueOf()
-        console.log(now)
         const daysElapsed = (now - mtime) / (24 * 3600_000)
 
         // Documents boost
@@ -220,19 +231,20 @@ export class SearchEngine {
 
     // Filter query results that match the path
     if (query.query.path) {
-      results = results.filter(r =>
-        query.query.path?.some(p =>
-          (r.id as string).toLowerCase().includes(p.toLowerCase())
-        )
-      )
+      results = results.filter(r => {
+        const rPath = settings.ignoreDiacritics
+          ? removeDiacritics(r.id as string, settings.ignoreArabicDiacritics).toLowerCase()
+          : (r.id as string).toLowerCase()
+        return query.query.path?.some(p => rPath.includes(p.toLowerCase()))
+      })
     }
     if (query.query.exclude.path) {
-      results = results.filter(
-        r =>
-          !query.query.exclude.path?.some(p =>
-            (r.id as string).toLowerCase().includes(p.toLowerCase())
-          )
-      )
+      results = results.filter(r => {
+        const rPath = settings.ignoreDiacritics
+          ? removeDiacritics(r.id as string, settings.ignoreArabicDiacritics).toLowerCase()
+          : (r.id as string).toLowerCase()
+        return !query.query.exclude.path?.some(p => rPath.includes(p.toLowerCase()))
+      })
     }
 
     if (!results.length) {
@@ -274,7 +286,7 @@ export class SearchEngine {
     const tags = query.getTags()
 
     for (const result of results) {
-      const path = result.id
+      const path = result.id as string
       if (settings.downrankedFoldersFilters.length > 0) {
         // downrank files that are in folders listed in the downrankedFoldersFilters
         let downrankingFolder = false
@@ -314,6 +326,23 @@ export class SearchEngine {
         }
       }
 
+      // Boost results whose title (basename or displayTitle) starts with the full query
+      const queryStr = query.segmentsToStr().toLowerCase()
+      if (queryStr) {
+        let title = (path.split('/').pop() ?? '').replace(/\.[^.]+$/, '')
+        if (metadata && settings.displayTitle) {
+          if (settings.displayTitle === '#heading') {
+            title = metadata?.headings?.find(h => h.level === 1)?.heading ?? title
+          } else {
+            title = (metadata?.frontmatter?.[settings.displayTitle] as string | undefined) ?? title
+          }
+        }
+        if (title.toLowerCase().startsWith(queryStr)) {
+          logVerbose(`Exact title prefix match: ${path}`)
+          result.score *= 100
+        }
+      }
+
       // Put the results with tags on top
       for (const tag of tags) {
         if ((result.tags ?? []).includes(tag)) {
@@ -348,7 +377,7 @@ export class SearchEngine {
       results = results.filter(r => {
         const document = documents.find(d => d.path === r.id)
         const title = document?.path.toLowerCase() ?? ''
-        const content = (document?.cleanedContent ?? '').toLowerCase()
+        const content = normalizeExactMatchContent(document?.content ?? '')
         return exactTerms.every(
           q =>
             content.includes(q) ||
@@ -397,6 +426,9 @@ export class SearchEngine {
     query: Query,
     options?: Partial<{ singleFilePath?: string }>
   ): Promise<ResultNote[]> {
+    // Clear highlight regex cache for fresh search
+    this.plugin.textProcessor.clearHighlightCache()
+
     // Get the raw results
     let results: SearchResult[]
     if (this.plugin.settings.simpleSearch) {
@@ -430,8 +462,9 @@ export class SearchEngine {
 
       // Inject embeds in the results
       for (const embed of embeds) {
-        total++
         const newDoc = await this.plugin.documentsRepository.getDocument(embed)
+        if (!newDoc?.path) continue
+        total++
         documents.splice(i + 1, 0, newDoc)
         results.splice(i + 1, 0, {
           id: newDoc.path,
@@ -446,7 +479,7 @@ export class SearchEngine {
     }
 
     // Map the raw results to get usable suggestions
-    const resultNotes = results.map(result => {
+    const resultNotes = results.map((result, index) => {
       logVerbose('Locating matches for', result.id)
       let note = documents.find(d => d.path === result.id)
       if (!note) {
@@ -475,11 +508,11 @@ export class SearchEngine {
       logVerbose('Matching tokens:', foundWords)
 
       logVerbose('Getting matches locations...')
-      const matches = this.plugin.textProcessor.getMatches(
-        note.content,
-        foundWords,
-        query
-      )
+      // Only compute matches eagerly for first 10 visible results
+      // Remaining results compute matches lazily in ResultItemVault on mount
+      const matches = index < 10
+        ? this.plugin.textProcessor.getMatches(note.content, foundWords, query)
+        : []
       logVerbose(`Matches for note "${note.path}"`, matches)
       const resultNote: ResultNote = {
         score: result.score,

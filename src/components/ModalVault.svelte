@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MarkdownView, Notice, Platform, TFile } from 'obsidian'
+  import { MarkdownView, Notice, Platform, TFile, debounce } from 'obsidian'
   import { onDestroy, onMount, tick } from 'svelte'
   import InputSearch from './InputSearch.svelte'
   import ModalContainer from './ModalContainer.svelte'
@@ -17,6 +17,7 @@
     getAltKeyLabel,
     getExtension,
     isFilePDF,
+    isModKeyPressed,
     loopIndex,
   } from '../tools/utils'
   import {
@@ -26,7 +27,6 @@
   import ResultItemVault from './ResultItemVault.svelte'
   import { Query } from '../search/query'
   import { cancelable, CancelablePromise } from 'cancelable-promise'
-  import { debounce } from 'es-toolkit'
   import type OmnisearchPlugin from '../main'
   import LazyLoader from './lazy-loader/LazyLoader.svelte'
 
@@ -48,27 +48,13 @@
   let indexingStepDesc = $state('')
   let searching = $state(true)
   let refInput: InputSearch | undefined
-  let openInNewPaneKey: string = $state('')
-  let openInCurrentPaneKey: string = $state('')
-  let createInNewPaneKey: string = $state('')
-  let createInCurrentPaneKey: string = $state('')
-  let openInNewLeafKey: string = `${getCtrlKeyLabel()} ${getAltKeyLabel()} ↵`
+  const openInCurrentPaneKey = '↵'
+  const openInNewPaneKey = `${getCtrlKeyLabel()} ↵`
+  const createInCurrentPaneKey = 'Shift ↵'
+  const createInNewPaneKey = `${getCtrlKeyLabel()} Shift ↵`
+  const openInNewLeafKey = `${getCtrlKeyLabel()} ${getAltKeyLabel()} ↵`
 
   const selectedNote = $derived(resultNotes[selectedIndex])
-
-  $effect(() => {
-    if (plugin.settings.openInNewPane) {
-      openInNewPaneKey = '↵'
-      openInCurrentPaneKey = getCtrlKeyLabel() + ' ↵'
-      createInNewPaneKey = 'Shift ↵'
-      createInCurrentPaneKey = getCtrlKeyLabel() + ' Shift ↵'
-    } else {
-      openInNewPaneKey = getCtrlKeyLabel() + ' ↵'
-      openInCurrentPaneKey = '↵'
-      createInNewPaneKey = getCtrlKeyLabel() + ' Shift ↵'
-      createInCurrentPaneKey = 'Shift ↵'
-    }
-  })
 
   $effect(() => {
     if (searchQuery) {
@@ -168,11 +154,16 @@
 
   function onClick(evt?: MouseEvent | KeyboardEvent) {
     if (!selectedNote) return
-    if (evt?.ctrlKey) {
+    if (isModKeyPressed(evt)) {
       openNoteInNewPane()
     } else {
       openNoteAndCloseModal()
     }
+  }
+
+  function openNoteInNewPane(): void {
+    if (!selectedNote) return
+    openSearchResult(selectedNote, true)
     modal.close()
   }
 
@@ -185,12 +176,6 @@
   function openNoteInBackground(): void {
     if (!selectedNote) return
     openSearchResult(selectedNote, true)
-  }
-
-  function openNoteInNewPane(): void {
-    if (!selectedNote) return
-    openSearchResult(selectedNote, true)
-    modal.close()
   }
 
   function openNoteInNewLeaf(): void {
@@ -350,6 +335,10 @@
         note={result}
         on:mousemove={_ => (selectedIndex = i)}
         on:click={onClick}
+        on:longpress={() => {
+          selectedIndex = i
+          openNoteInNewPane()
+        }}
         on:auxclick={evt => {
           if (evt.button == 1) openNoteInNewPane()
         }} />
@@ -394,6 +383,13 @@
     <span class="prompt-instruction-command">{openInNewPaneKey}</span>
     <span>to open in a new pane</span>
   </div>
+
+  {#if Platform.isMobile}
+    <div class="prompt-instruction">
+      <span class="prompt-instruction-command">hold</span>
+      <span>to open in a new pane</span>
+    </div>
+  {/if}
 
   <div class="prompt-instruction">
     <span class="prompt-instruction-command">{openInNewLeafKey}</span>

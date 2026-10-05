@@ -6,7 +6,16 @@ import { escapeRegExp } from 'es-toolkit'
 import type OmnisearchPlugin from '../main'
 
 export class TextProcessor {
+  private highlightRegexCache = new Map<string, RegExp>()
+
   constructor(private plugin: OmnisearchPlugin) {}
+
+  /**
+   * Clear the highlight regex cache. Call at the start of each search.  
+   */
+  public clearHighlightCache(): void {
+    this.highlightRegexCache.clear()
+  }
 
   /**
    * Wraps the matches in the text with a <span> element and a highlight class
@@ -23,11 +32,19 @@ export class TextProcessor {
       return text
     }
     try {
+      const cacheKey = matches
+        .map(m => escapeRegExp(m.match))
+        .sort()
+        .join('|')
+
+      let regex = this.highlightRegexCache.get(cacheKey)
+      if (!regex) {
+        regex = new RegExp(`(${cacheKey})`, 'giu')
+        this.highlightRegexCache.set(cacheKey, regex)
+      }
+
       return text.replace(
-        new RegExp(
-          `(${matches.map(item => escapeRegExp(item.match)).join('|')})`,
-          'giu'
-        ),
+        regex,
         `<span class="${highlightClass}">$1</span>`
       )
     } catch (e) {
@@ -96,11 +113,15 @@ export class TextProcessor {
       query &&
       (query.query.text.length > 1 || query.getExactTerms().length > 0)
     ) {
-      const best = text.indexOf(query.getBestStringForExcerpt())
+      const excerptString = query.getBestStringForExcerpt()
+      // Matched case-insensitively via regex rather than by lowercasing `text`,
+      // because toLowerCase() is not length-preserving across all of Unicode and
+      // would desynchronise `best` from the offsets collected above.
+      const best = text.search(new RegExp(escapeRegExp(excerptString), 'iu'))
       if (best > -1 && matches.find(m => m.offset === best)) {
         matches.unshift({
           offset: best,
-          match: query.getBestStringForExcerpt(),
+          match: excerptString,
         })
       }
     }

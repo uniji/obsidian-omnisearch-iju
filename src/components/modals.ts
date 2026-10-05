@@ -65,22 +65,11 @@ abstract class OmnisearchModal extends Modal {
 
     // #endregion Up/Down navigation
 
-    let openInCurrentPaneKey: Modifier[]
-    let openInNewPaneKey: Modifier[]
-    let createInCurrentPaneKey: Modifier[]
-    let createInNewPaneKey: Modifier[]
-    let openInNewLeafKey: Modifier[] = ['Mod', 'Alt']
-    if (settings.openInNewPane) {
-      openInCurrentPaneKey = ['Mod']
-      openInNewPaneKey = []
-      createInCurrentPaneKey = ['Mod', 'Shift']
-      createInNewPaneKey = ['Shift']
-    } else {
-      openInCurrentPaneKey = []
-      openInNewPaneKey = ['Mod']
-      createInCurrentPaneKey = ['Shift']
-      createInNewPaneKey = ['Mod', 'Shift']
-    }
+    const openInCurrentPaneKey: Modifier[] = []
+    const openInNewPaneKey: Modifier[] = ['Mod']
+    const createInCurrentPaneKey: Modifier[] = ['Shift']
+    const createInNewPaneKey: Modifier[] = ['Mod', 'Shift']
+    const openInNewLeafKey: Modifier[] = ['Mod', 'Alt']
 
     // Open in new pane
     this.scope.register(openInNewPaneKey, 'Enter', e => {
@@ -183,8 +172,10 @@ export class OmnisearchVaultModal extends OmnisearchModal {
       this.onClose = () => {
         // Since the component is manually created,
         // we also need to manually destroy it
-        unmount(cmp)
+        void unmount(cmp)
       }
+    }).catch(e => {
+      console.error('Omnisearch - Failed to load search history', e)
     })
   }
 }
@@ -217,7 +208,7 @@ export class OmnisearchInFileModal extends OmnisearchModal {
       if (parent) {
         parent.containerEl.toggleVisibility(true)
       }
-      unmount(cmp)
+      void unmount(cmp)
     }
   }
 }
